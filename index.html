@@ -45,7 +45,7 @@ const { useState, useEffect, useMemo, useRef, useCallback, memo } = React;
 // ============================================================
 const SimApp = (function() {
   const { useState, useEffect, useMemo, useRef, Fragment } = React;
-const __WBD_BUILD = 'BUILD_2026-06-11_AI_HUMAN'; 
+const __WBD_BUILD = 'BUILD_2026-06-11_AI_HUMAN_v2'; 
     const SEED_PLAYERS = [];
 
 // ============================================================
@@ -1193,7 +1193,7 @@ function computeInterest(player, manager, pub, allPlayers, allManagers) {
   const isP = posList.includes('P');
   const isFielder = posList.some(p => p !== 'P');
 
-  let interest = 0.30;  // 기본: 약한 관심 (대부분 견제만)
+  let interest = 0.20;  // 기본 낮춤 (찜/로스터 보너스가 추가 신호라 베이스 ↓)
 
   // 선수 객관 가치 (성적 기반) — 가장 큰 신호
   if (pub.value >= 55) interest += 0.40;
@@ -1204,16 +1204,16 @@ function computeInterest(player, manager, pub, allPlayers, allManagers) {
   // === 찜 리스트 (드래프트 전 계획) — 사람의 일관된 의지 ===
   if (manager.targets) {
     const t = manager.targets;
-    if (t.tier1 && t.tier1.includes(player.id)) interest += 0.35;       // 무조건 잡고 싶은 선수
-    else if (t.tier2 && t.tier2.includes(player.id)) interest += 0.20;  // 노리는 선수
-    else if (t.watch && t.watch.includes(player.id)) interest += 0.10;  // 관심 선수
+    if (t.tier1 && t.tier1.includes(player.id)) interest += 0.30;       // 무조건 잡고 싶은 선수
+    else if (t.tier2 && t.tier2.includes(player.id)) interest += 0.15;  // 노리는 선수
+    else if (t.watch && t.watch.includes(player.id)) interest += 0.07;  // 관심 선수
     // 찜 1순위를 놓친 만큼 남은 찜에 절실해짐
     if (allPlayers && (t.tier1.includes(player.id) || t.tier2.includes(player.id))) {
       const missedT1 = t.tier1.filter(id => {
         const pp = allPlayers.find(x => x.id === id);
         return pp && pp.takenBy && pp.takenBy !== manager.id;
       }).length;
-      interest += missedT1 * 0.06;
+      interest += missedT1 * 0.04;
     }
   }
 
@@ -1231,12 +1231,12 @@ function computeInterest(player, manager, pub, allPlayers, allManagers) {
     });
     // 이 선수 포지션이 내 로스터에 하나도 없으면 +
     const fillsHole = posList.some(pos => !myPosCount[pos]);
-    if (fillsHole) interest += 0.10;
+    if (fillsHole) interest += 0.06;
     // 모든 포지션이 이미 2명+ 과적재면 -
     const allStuffed = posList.length > 0 && posList.every(pos => (myPosCount[pos] || 0) >= 2);
     if (allStuffed) interest -= 0.12;
     // 투수 0명인데 픽 4개 이상 진행됐으면 투수 절실
-    if (isP && myPitchers === 0 && manager.picks.length >= 4) interest += 0.18;
+    if (isP && myPitchers === 0 && manager.picks.length >= 4) interest += 0.12;
   }
 
   // === 경쟁 인식 (다른 감독들도 이 포지션 비었으면 수요 ↑ → 선점 심리) ===
@@ -1251,7 +1251,7 @@ function computeInterest(player, manager, pub, allPlayers, allManagers) {
       });
       if (posList.some(pos => !omPos[pos])) demand++;
     });
-    if (demand >= 5) interest += 0.05;  // 수요 많음 → 살짝 선점 심리
+    if (demand >= 5) interest += 0.03;  // 수요 많음 → 살짝 선점 심리
   }
 
   // 성격 매칭
@@ -1339,11 +1339,11 @@ function computeAIBid(player, manager, allPlayers, options = {}) {
       const remainInPlan = planned - spentInSection;
       if (remainInPlan <= 0) bid *= 0.6;            // 계획 초과: 절제
       else if (remainInPlan < bid) bid *= 0.85;     // 계획 거의 소진: 약간 절제
-      else if (remainInPlan > bid * 2.5) bid *= 1.15;  // 계획 많이 남음: 여유 베팅
+      else if (remainInPlan > bid * 2.5) bid *= 1.05;  // 계획 많이 남음: 살짝 여유
     }
     // === 감정: 동률 패배 누적 → 분함 → 베팅 ↑ ===
     if (manager.frustration > 0) {
-      bid *= 1 + Math.min(3, manager.frustration) * 0.07;  // 최대 +21%
+      bid *= 1 + Math.min(3, manager.frustration) * 0.05;  // 최대 +15%
     }
     // 포지션 약한 가중 (성적 우선이라 약하게)
     const isP = (player.positions || []).includes('P');

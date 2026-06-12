@@ -45,7 +45,7 @@ const { useState, useEffect, useMemo, useRef, useCallback, memo } = React;
 // ============================================================
 const SimApp = (function() {
   const { useState, useEffect, useMemo, useRef, Fragment } = React;
-const __WBD_BUILD = 'BUILD_2026-06-11_AI_HUMAN_v2'; 
+const __WBD_BUILD = 'BUILD_2026-06-11_AI_RANKS'; 
     const SEED_PLAYERS = [];
 
 // ============================================================
@@ -1204,12 +1204,23 @@ function computeInterest(player, manager, pub, allPlayers, allManagers) {
   // === 찜 리스트 (드래프트 전 계획) — 사람의 일관된 의지 ===
   if (manager.targets) {
     const t = manager.targets;
-    if (t.tier1 && t.tier1.includes(player.id)) interest += 0.30;       // 무조건 잡고 싶은 선수
-    else if (t.tier2 && t.tier2.includes(player.id)) interest += 0.15;  // 노리는 선수
-    else if (t.watch && t.watch.includes(player.id)) interest += 0.07;  // 관심 선수
-    // 찜 1순위를 놓친 만큼 남은 찜에 절실해짐
-    if (allPlayers && (t.tier1.includes(player.id) || t.tier2.includes(player.id))) {
-      const missedT1 = t.tier1.filter(id => {
+    // 전체 랭킹 기반 그라데이션 (모든 선수에 순위 보너스 — 찜 아닌 선수도 차등)
+    const rank = t.ranks ? t.ranks[player.id] : undefined;
+    if (rank !== undefined) {
+      if (rank < 3) interest += 0.30;        // 1~3위: 무조건 잡고 싶음
+      else if (rank < 10) interest += 0.18;  // 4~10위: 노림
+      else if (rank < 25) interest += 0.10;  // 11~25위: 관심
+      else if (rank < 45) interest += 0.04;  // 26~45위: 나쁘지 않음
+      else if (rank >= 70) interest -= 0.05; // 70위 밖: 비선호
+    } else {
+      // 구버전 호환 (ranks 없는 옛 state)
+      if (t.tier1 && t.tier1.includes(player.id)) interest += 0.30;
+      else if (t.tier2 && t.tier2.includes(player.id)) interest += 0.15;
+      else if (t.watch && t.watch.includes(player.id)) interest += 0.07;
+    }
+    // 찜 1순위를 놓친 만큼 남은 상위권에 절실해짐
+    if (allPlayers && rank !== undefined && rank < 25) {
+      const missedT1 = (t.tier1 || []).filter(id => {
         const pp = allPlayers.find(x => x.id === id);
         return pp && pp.takenBy && pp.takenBy !== manager.id;
       }).length;
@@ -1440,10 +1451,14 @@ function createInitialState(customPlayers) {
       score *= 1 + (Math.random() - 0.5) * 0.5;
       return { id: p.id, score };
     }).sort((a, b) => b.score - a.score);
+    // 전체 개인 랭킹 (모든 선수에 순위) + 상위 tier 별도 보관
+    const ranks = {};
+    scored.forEach((x, idx) => { ranks[x.id] = idx; });
     m.targets = {
-      tier1: scored.slice(0, 3).map(x => x.id),      // 무조건 잡고 싶은 3명
-      tier2: scored.slice(3, 8).map(x => x.id),      // 나오면 노리는 5명
-      watch: scored.slice(8, 18).map(x => x.id)      // 관심 10명
+      tier1: scored.slice(0, 3).map(x => x.id),
+      tier2: scored.slice(3, 10).map(x => x.id),
+      watch: scored.slice(10, 25).map(x => x.id),
+      ranks  // { playerId: 순위(0이 최고) } — 전원 순위화
     };
   });
   return {
@@ -2534,6 +2549,12 @@ function S2Phase({ state, setState }) {
       if (avgPS2 > 25) thresholdAdj = -0.15;
       else if (avgPS2 > 18) thresholdAdj = -0.08;
       else if (avgPS2 > 13) thresholdAdj = -0.03;
+      // S2 유찰 압박 (가볍게): 내 S2 슬롯 못 채웠고 풀이 줄어들면
+      const s2Need = SECTION_SLOTS.S2 - m.sectionCounts.S2;
+      const s2Remaining = state.players.filter(p => p.section === 'S2' && !p.takenBy).length;
+      if (s2Need > 0 && s2Remaining <= 8) {
+        thresholdAdj -= 0.08 * s2Need;
+      }
       const baseTh = pConf0.capRatio ? 0.50 : (pConf0.rookieMult ? 0.25 : (pConf0.starBoost ? 0.40 : 0.35));
       const threshold = Math.max(0.15, baseTh + thresholdAdj);
       // 1단계: 매물별 관심도 측정 (베팅 아직 X)
@@ -3019,8 +3040,16 @@ function S3Phase({ state, setState }) {
       if (avgPS3 > 25) thresholdAdj3 = -0.18;
       else if (avgPS3 > 18) thresholdAdj3 = -0.10;
       else if (avgPS3 > 13) thresholdAdj3 = -0.03;
+      // === 유찰 압박: S3 후반인데 내 S3 슬롯 못 채웠으면 눈높이 ↓ ===
+      // (계속 기다리면 유찰 강제 배정 = 최악. 풀 줄어들면 "그래도 쟤가 낫다" 타협)
+      const s3Need = SECTION_SLOTS.S3 - m.sectionCounts.S3;
+      const s3Progress = (state.s3_group_idx || 0) / 12;  // 0~1
+      if (s3Need > 0 && s3Progress > 0.4) {
+        // 진행 40% 이후부터 압박 시작, 후반 + 슬롯 많이 빌수록 강함 (최대 -0.30)
+        thresholdAdj3 -= (s3Progress - 0.4) * 0.5 * (0.5 + s3Need / SECTION_SLOTS.S3);
+      }
       const baseTh3 = pConf0.capRatio ? 0.55 : ((pConf0.rookieMult || pConf0.starBoost) ? 0.30 : 0.40);
-      const threshold = Math.max(0.15, baseTh3 + thresholdAdj3);
+      const threshold = Math.max(0.12, baseTh3 + thresholdAdj3);
       // 1단계: 관심도 측정
       const interests = lotPlayers.map(player => {
         const pub = computePublicValue(player, pConf0.careerWeight || 1.0);
